@@ -95,7 +95,10 @@
   <summary>⚙️ Réglages (token GitHub)</summary>
   <label>Token fine-grained — scope « Contents: read &amp; write » sur le seul repo de données. Stocké uniquement dans ce navigateur.</label>
   <input class="meta-input" type="password" id="f-token">
-  <button class="btn" style="width:100%;margin-top:8px;font-size:1rem" id="save-token">Enregistrer le token</button>
+  <button type="button" class="btn" style="width:100%;margin-top:8px;font-size:1rem" id="save-token">Enregistrer le token</button>
+  <!-- Numéro de version affiché pour vérifier qu'on n'a pas une vieille
+       copie servie par le cache de GitHub Pages. -->
+  <div class="note">front v2</div>
 </details>
 
 <script>
@@ -127,11 +130,28 @@ async function ghGet(path) {
 }
 
 async function loadPlan() {
-  if (!token()) { $("subtitle").textContent = "⚙️ Renseigne d'abord ton token dans les réglages en bas."; return; }
-  const res = await ghGet("state/next-session.json");
-  if (!res.ok) { $("subtitle").textContent = `Erreur ${res.status} — token ou repo inaccessible.`; return; }
-  plan = await res.json();
-  render();
+  const sub = $("subtitle");
+  if (!token()) { sub.textContent = "⚙️ Renseigne d'abord ton token dans les réglages en bas."; return; }
+  sub.textContent = "Chargement de la prochaine séance…";
+  // Tout passe par un try/catch : un échec silencieux (promesse rejetée)
+  // laisserait l'écran figé sans explication — c'est le pire des bugs à
+  // diagnostiquer depuis une salle de sport.
+  try {
+    const res = await ghGet("state/next-session.json");
+    if (!res.ok) {
+      const hints = {
+        401: "token invalide ou expiré",
+        403: "accès refusé (scope du token ?)",
+        404: "introuvable — le token a-t-il bien accès au repo privé z2h-tracker ?",
+      };
+      sub.textContent = `Erreur ${res.status} : ${hints[res.status] ?? "réponse inattendue de GitHub"}.`;
+      return;
+    }
+    plan = await res.json();
+    render();
+  } catch (e) {
+    sub.textContent = `Échec réseau ou script : ${e.message}`;
+  }
 }
 
 // --- Affichage -------------------------------------------------------
@@ -306,8 +326,18 @@ function status(msg, isErr, isOk) {
 
 // --- Init ------------------------------------------------------------
 $("save-token").addEventListener("click", () => {
-  localStorage.setItem("z2h_token", $("f-token").value.trim());
+  const value = $("f-token").value.trim();
+  if (!value) { $("subtitle").textContent = "Le champ token est vide."; return; }
+  // localStorage peut être interdit (navigation privée iOS, file:// selon
+  // le navigateur) : sans catch, le clic échouerait sans AUCUN retour.
+  try {
+    localStorage.setItem("z2h_token", value);
+  } catch (e) {
+    $("subtitle").textContent = `Stockage impossible (${e.name}) — navigation privée ? Le token ne peut pas être retenu.`;
+    return;
+  }
   $("f-token").value = "";
+  $("subtitle").textContent = "Token enregistré ✔";
   loadPlan();
 });
 $("send").addEventListener("click", send);
