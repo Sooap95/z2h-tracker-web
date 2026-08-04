@@ -75,7 +75,20 @@
   <div class="min" id="week-min"></div>
 </div>
 
+<div class="card">
+  <div style="font-weight:700">Mensurations (hebdo ou mensuel)</div>
+  <label>Tour de taille (cm)</label>
+  <input class="meta-input" type="number" inputmode="decimal" step="0.5" id="f-waist" placeholder="—">
+  <label>Tour de bras (cm)</label>
+  <input class="meta-input" type="number" inputmode="decimal" step="0.5" id="f-arm" placeholder="—">
+  <label>Tour d'épaules (cm)</label>
+  <input class="meta-input" type="number" inputmode="decimal" step="0.5" id="f-shoulders" placeholder="—">
+  <button type="button" class="send" id="send-meas">Enregistrer les mensurations</button>
+  <div id="status-meas"></div>
+</div>
+
 <a class="nav" href="index.html">← Retour à la séance</a>
+<a class="nav" href="stats.html">Graphes →</a>
 
 <script>
 "use strict";
@@ -84,8 +97,11 @@
 const DATA_OWNER = "Sooap95";
 const DATA_REPO  = "z2h-tracker";
 const BRANCH     = "main";
-const API = `https://api.github.com/repos/${DATA_OWNER}/${DATA_REPO}/contents/data/daily.csv`;
+const CONTENTS = `https://api.github.com/repos/${DATA_OWNER}/${DATA_REPO}/contents`;
+const API = `${CONTENTS}/data/daily.csv`;
 const HEADER = "date,weight_kg,steps,kcal,first_meal,last_meal";
+const MEAS_API = `${CONTENTS}/data/measurements.csv`;
+const MEAS_HEADER = "date,waist_cm,arm_cm,shoulders_cm";
 
 const $ = (id) => document.getElementById(id);
 const token = () => localStorage.getItem("z2h_token") || "";
@@ -219,7 +235,54 @@ function status(msg, isErr, isOk) {
   el.className = isErr ? "err" : isOk ? "ok" : "";
 }
 
+// --- Mensurations -----------------------------------------------------
+// Même mécanique que daily.csv : lecture avec sha, remplacement de la
+// ligne du jour si elle existe, fichier trié par date.
+async function saveMeas() {
+  const date = $("f-date").value;
+  const [waist, arm, shoulders] = [$("f-waist").value, $("f-arm").value, $("f-shoulders").value];
+  if (!date || (!waist && !arm && !shoulders)) return statusMeas("Renseigne au moins une mesure.", true);
+  $("send-meas").disabled = true;
+  statusMeas("Envoi…");
+  try {
+    let lines = [MEAS_HEADER], sha;
+    const res = await fetch(`${MEAS_API}?ref=${BRANCH}`, {
+      cache: "no-store", headers: { Authorization: `Bearer ${token()}` } });
+    if (res.ok) {
+      const meta = await res.json();
+      sha = meta.sha;
+      lines = decodeURIComponent(escape(atob(meta.content.replace(/\n/g, "")))).trim().split("\n");
+    }
+    const line = [date, waist, arm, shoulders].join(",");
+    const idx = lines.findIndex(l => l.startsWith(date + ","));
+    if (idx > 0) lines[idx] = line; else lines.push(line);
+    const sorted = [MEAS_HEADER, ...lines.slice(1).sort()];
+    const put = await fetch(MEAS_API, {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${token()}`, Accept: "application/vnd.github+json" },
+      body: JSON.stringify({
+        message: `Mensurations ${date}`, branch: BRANCH,
+        content: btoa(unescape(encodeURIComponent(sorted.join("\n") + "\n"))),
+        ...(sha ? { sha } : {}),
+      }),
+    });
+    if (!put.ok) throw new Error(`HTTP ${put.status}`);
+    statusMeas("✔ Mensurations enregistrées.", false, true);
+  } catch (e) {
+    statusMeas(`Échec de l'envoi (${e.message}) — réessaie.`, true);
+  } finally {
+    $("send-meas").disabled = false;
+  }
+}
+
+function statusMeas(msg, isErr, isOk) {
+  const el = $("status-meas");
+  el.textContent = msg;
+  el.className = isErr ? "err" : isOk ? "ok" : "";
+}
+
 $("send").addEventListener("click", save);
+$("send-meas").addEventListener("click", saveMeas);
 $("f-date").value = new Date().toISOString().slice(0, 10);
 $("f-date").addEventListener("change", prefillToday);
 loadCsv();
