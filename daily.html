@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>z2h — quotidien</title>
+<style>
+  /* Même charte que index.html : écran séparé (§10 jalon 4) mais visuel
+     identique pour ne pas dérouter. */
+  :root {
+    --bg: #111418; --card: #1c2128; --line: #2c333c;
+    --txt: #e8eaed; --dim: #9aa3ad; --accent: #4da3ff; --ok: #38c172; --warn: #f4b03f;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--txt);
+    font-family: system-ui, -apple-system, sans-serif;
+    padding: 12px 12px calc(24px + env(safe-area-inset-bottom));
+    max-width: 560px; margin: 0 auto;
+  }
+  h1 { font-size: 1.25rem; margin: 8px 0 2px; }
+  .sub { color: var(--dim); font-size: .85rem; margin-bottom: 12px; min-height: 1.2em; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px; margin-bottom: 14px; }
+  label { display: block; color: var(--dim); font-size: .8rem; margin: 8px 0 4px; }
+  .meta-input {
+    width: 100%; min-height: 56px; font-size: 1.2rem; padding: 8px 12px;
+    background: #0d1013; color: var(--txt); border: 1px solid var(--line); border-radius: 10px;
+  }
+  .fast { color: var(--warn); font-size: .95rem; margin-top: 10px; min-height: 1.2em; }
+  .send {
+    width: 100%; min-height: 64px; margin-top: 12px; border: 0; border-radius: 12px;
+    background: var(--ok); color: #06130b; font-size: 1.25rem; font-weight: 800;
+  }
+  .send:disabled { opacity: .5; }
+  #status { margin-top: 10px; font-size: .9rem; min-height: 1.2em; }
+  #status.err { color: #ff7a7a; } #status.ok { color: var(--ok); }
+  table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+  th, td { text-align: right; padding: 6px 4px; border-bottom: 1px solid var(--line); }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--dim); font-weight: 600; }
+  .min { color: var(--ok); font-size: .85rem; margin-top: 8px; }
+  a.nav { display: flex; align-items: center; justify-content: center; min-height: 56px;
+          color: var(--accent); text-decoration: none; font-weight: 600; }
+</style>
+</head>
+<body>
+<h1>Suivi quotidien</h1>
+<div class="sub" id="subtitle">Chargement…</div>
+
+<div class="card">
+  <label>Date</label>
+  <input class="meta-input" type="date" id="f-date">
+  <label>Poids à jeun (kg) — après passage aux toilettes</label>
+  <input class="meta-input" type="number" inputmode="decimal" step="0.1" id="f-weight" placeholder="—">
+  <label>Pas (objectif 10 000, jours off compris)</label>
+  <input class="meta-input" type="number" inputmode="numeric" id="f-steps" placeholder="—">
+  <label>Calories du jour</label>
+  <input class="meta-input" type="number" inputmode="numeric" id="f-kcal" placeholder="—">
+  <label>Premier repas</label>
+  <input class="meta-input" type="time" id="f-first">
+  <label>Dernier repas</label>
+  <input class="meta-input" type="time" id="f-last">
+  <div class="fast" id="fast-info"></div>
+  <button type="button" class="send" id="send">Enregistrer la journée</button>
+  <div id="status"></div>
+</div>
+
+<div class="card">
+  <div style="font-weight:700;margin-bottom:8px">7 derniers jours</div>
+  <table id="history"><thead>
+    <tr><th>Date</th><th>Poids</th><th>Pas</th><th>kcal</th><th>Fenêtre</th></tr>
+  </thead><tbody></tbody></table>
+  <!-- §5 : l'indicateur de progression est le MINIMUM hebdo du poids,
+       jamais la moyenne — c'est lui qu'on met en avant. -->
+  <div class="min" id="week-min"></div>
+</div>
+
+<a class="nav" href="index.html">← Retour à la séance</a>
+
+<script>
+"use strict";
+// Écran quotidien : afficher, saisir, envoyer une ligne de data/daily.csv.
+// Aucune logique métier ici non plus — le CSV est la source de vérité.
+const DATA_OWNER = "Sooap95";
+const DATA_REPO  = "z2h-tracker";
+const BRANCH     = "main";
+const API = `https://api.github.com/repos/${DATA_OWNER}/${DATA_REPO}/contents/data/daily.csv`;
+const HEADER = "date,weight_kg,steps,kcal,first_meal,last_meal";
+
+const $ = (id) => document.getElementById(id);
+const token = () => localStorage.getItem("z2h_token") || "";
+let csvLines = [HEADER];   // contenu courant du CSV
+let csvSha = null;         // sha requis par l'API pour réécrire le fichier
+
+async function loadCsv() {
+  const sub = $("subtitle");
+  if (!token()) { sub.textContent = "⚙️ Renseigne ton token sur l'écran séance."; return; }
+  try {
+    const res = await fetch(`${API}?ref=${BRANCH}`, {
+      cache: "no-store",
+      headers: { Authorization: `Bearer ${token()}` },
+    });
+    if (res.status === 404) { sub.textContent = "daily.csv absent — il sera créé au premier enregistrement."; return; }
+    if (!res.ok) { sub.textContent = `Erreur ${res.status} — token ou repo inaccessible.`; return; }
+    const meta = await res.json();
+    csvSha = meta.sha;
+    // Contenu livré en base64 ; atob seul casse l'UTF-8, d'où le détour.
+    const text = decodeURIComponent(escape(atob(meta.content.replace(/\n/g, ""))));
+    csvLines = text.trim().split("\n");
+    sub.textContent = `${csvLines.length - 1} jour(s) enregistré(s)`;
+    renderHistory();
+    prefillToday();
+  } catch (e) {
+    sub.textContent = `Échec réseau ou script : ${e.message}`;
+  }
+}
+
+// --- Historique (affichage seul) ------------------------------------
+function entries() {
+  return csvLines.slice(1).map(l => {
+    const [date, weight, steps, kcal, first, last] = l.split(",");
+    return { date, weight, steps, kcal, first, last };
+  });
+}
+
+function eatingWindow(first, last) {
+  // Fenêtre alimentaire = durée entre premier et dernier repas du jour.
+  // 16/8 respecté si ≤ 8 h (§1 : fenêtre type ~12h–20h).
+  if (!first || !last) return null;
+  const [fh, fm] = first.split(":").map(Number);
+  const [lh, lm] = last.split(":").map(Number);
+  const min = (lh * 60 + lm) - (fh * 60 + fm);
+  return min >= 0 ? min : null;
+}
+
+function fmtWindow(min) {
+  return min === null ? "—" : `${Math.floor(min / 60)}h${String(min % 60).padStart(2, "0")}`;
+}
+
+function renderHistory() {
+  const rows = entries().slice(-7).reverse();
+  $("history").querySelector("tbody").innerHTML = rows.map(e => {
+    const w = eatingWindow(e.first, e.last);
+    const over = w !== null && w > 8 * 60;
+    return `<tr><td>${e.date.slice(5)}</td><td>${e.weight || "—"}</td>
+      <td>${e.steps || "—"}</td><td>${e.kcal || "—"}</td>
+      <td${over ? ' style="color:#ff7a7a"' : ""}>${fmtWindow(w)}</td></tr>`;
+  }).join("");
+  const weights = rows.map(e => parseFloat(e.weight)).filter(w => !isNaN(w));
+  $("week-min").textContent = weights.length
+    ? `Minimum sur 7 jours : ${Math.min(...weights)} kg — c'est LUI l'indicateur, pas la moyenne.`
+    : "";
+}
+
+function prefillToday() {
+  // Ressaisie du jour : on recharge la ligne existante pour la corriger.
+  const today = $("f-date").value;
+  const e = entries().find(x => x.date === today);
+  if (!e) return;
+  $("f-weight").value = e.weight; $("f-steps").value = e.steps;
+  $("f-kcal").value = e.kcal; $("f-first").value = e.first; $("f-last").value = e.last;
+  updateFastInfo();
+}
+
+// --- Fenêtre de jeûne en direct -------------------------------------
+function updateFastInfo() {
+  const w = eatingWindow($("f-first").value, $("f-last").value);
+  if (w === null) { $("fast-info").textContent = ""; return; }
+  const fast = 24 * 60 - w;
+  $("fast-info").textContent =
+    `Fenêtre alimentaire : ${fmtWindow(w)} · jeûne : ${fmtWindow(fast)} ` +
+    (w <= 8 * 60 ? "✔ 16/8 respecté" : "✘ au-delà des 8 h");
+}
+["f-first", "f-last"].forEach(id => $(id).addEventListener("input", updateFastInfo));
+
+// --- Enregistrement --------------------------------------------------
+async function save() {
+  const date = $("f-date").value;
+  if (!date) return status("Renseigne la date.", true);
+  // Champs vides autorisés : une pesée sans compteur de pas reste une
+  // ligne valide. Les virgules sont interdites par construction (que des
+  // nombres et des heures).
+  const line = [date, $("f-weight").value, $("f-steps").value,
+                $("f-kcal").value, $("f-first").value, $("f-last").value].join(",");
+  const idx = csvLines.findIndex(l => l.startsWith(date + ","));
+  if (idx >= 0) csvLines[idx] = line; else csvLines.push(line);
+  // Lignes triées par date : le fichier reste lisible et diffable.
+  const sorted = [HEADER, ...csvLines.slice(1).sort()];
+
+  $("send").disabled = true;
+  status("Envoi…");
+  try {
+    const res = await fetch(API, {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${token()}`,
+                 Accept: "application/vnd.github+json" },
+      body: JSON.stringify({
+        message: `Quotidien ${date}`,
+        branch: BRANCH,
+        content: btoa(unescape(encodeURIComponent(sorted.join("\n") + "\n"))),
+        ...(csvSha ? { sha: csvSha } : {}),
+      }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    csvSha = (await res.json()).content.sha;   // prêt pour une ressaisie immédiate
+    csvLines = sorted;
+    renderHistory();
+    status("✔ Journée enregistrée.", false, true);
+  } catch (e) {
+    status(`Échec de l'envoi (${e.message}) — réessaie.`, true);
+  } finally {
+    $("send").disabled = false;
+  }
+}
+
+function status(msg, isErr, isOk) {
+  const el = $("status");
+  el.textContent = msg;
+  el.className = isErr ? "err" : isOk ? "ok" : "";
+}
+
+$("send").addEventListener("click", save);
+$("f-date").value = new Date().toISOString().slice(0, 10);
+$("f-date").addEventListener("change", prefillToday);
+loadCsv();
+</script>
+</body>
+</html>
