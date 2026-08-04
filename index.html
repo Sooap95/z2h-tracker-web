@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<!-- viewport-fit + user-scalable=no : évite le zoom involontaire au double-tap
+     sur les steppers, le fléau des saisies entre deux séries. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>z2h — séance</title>
+<style>
+  /* Contexte d'usage (§9) : salle de sport, mains moites, lumière médiocre.
+     → fond sombre, gros chiffres, cibles tactiles ≥ 56 px, zéro navigation. */
+  :root {
+    --bg: #111418; --card: #1c2128; --line: #2c333c;
+    --txt: #e8eaed; --dim: #9aa3ad; --accent: #4da3ff; --ok: #38c172; --warn: #f4b03f;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--txt);
+    font-family: system-ui, -apple-system, sans-serif;
+    padding: 12px 12px calc(24px + env(safe-area-inset-bottom));
+    max-width: 560px; margin: 0 auto;
+  }
+  h1 { font-size: 1.25rem; margin: 8px 0 2px; }
+  .sub { color: var(--dim); font-size: .85rem; margin-bottom: 12px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 12px; padding: 12px; margin-bottom: 14px;
+  }
+  .exo-name { font-size: 1.05rem; font-weight: 700; }
+  .exo-meta { color: var(--dim); font-size: .8rem; margin: 2px 0 8px; }
+  .reason { color: var(--warn); font-size: .8rem; margin-bottom: 8px; }
+  .note { color: var(--dim); font-size: .78rem; margin-top: 8px; font-style: italic; }
+
+  /* Une série = une ligne : [−] charge [+] · reps [−][+]. */
+  .set-row { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+  .btn {
+    min-width: 56px; min-height: 56px; border-radius: 10px;
+    border: 1px solid var(--line); background: #242b34; color: var(--txt);
+    font-size: 1.5rem; touch-action: manipulation;
+  }
+  .btn:active { background: #2f3945; }
+  .w-input, .r-input {
+    min-height: 56px; text-align: center; font-size: 1.6rem; font-weight: 700;
+    background: #0d1013; color: var(--txt); border: 1px solid var(--line);
+    border-radius: 10px; width: 100%;
+  }
+  .w-input { flex: 1; }
+  .r-input { width: 64px; font-size: 1.2rem; }
+  .r-btn { min-width: 44px; min-height: 56px; font-size: 1.1rem; }
+  .range { color: var(--dim); font-size: .75rem; width: 46px; text-align: center; }
+
+  .timer-btn {
+    width: 100%; min-height: 56px; margin-top: 4px; border-radius: 10px;
+    border: 1px solid var(--accent); background: transparent; color: var(--accent);
+    font-size: 1.1rem; font-weight: 600; touch-action: manipulation;
+  }
+  .timer-btn.running { background: var(--accent); color: #08131f; }
+
+  label { display: block; color: var(--dim); font-size: .8rem; margin: 8px 0 4px; }
+  .meta-input, textarea {
+    width: 100%; min-height: 56px; font-size: 1.1rem; padding: 8px 12px;
+    background: #0d1013; color: var(--txt); border: 1px solid var(--line); border-radius: 10px;
+  }
+  textarea { min-height: 72px; font-size: 1rem; }
+  .send {
+    width: 100%; min-height: 64px; margin-top: 12px; border: 0; border-radius: 12px;
+    background: var(--ok); color: #06130b; font-size: 1.25rem; font-weight: 800;
+  }
+  .send:disabled { opacity: .5; }
+  #status { margin-top: 10px; font-size: .9rem; min-height: 1.2em; }
+  #status.err { color: #ff7a7a; } #status.ok { color: var(--ok); }
+  details { margin-top: 18px; color: var(--dim); }
+  summary { min-height: 44px; display: flex; align-items: center; }
+</style>
+</head>
+<body>
+<h1 id="title">z2h-tracker</h1>
+<div class="sub" id="subtitle">Chargement…</div>
+<div id="exercises"></div>
+
+<div class="card" id="meta" hidden>
+  <label>Date de la séance</label>
+  <input class="meta-input" type="date" id="f-date">
+  <label>Poids du jour (kg)</label>
+  <input class="meta-input" type="number" inputmode="decimal" step="0.1" id="f-bw" placeholder="—">
+  <label>Durée (min)</label>
+  <input class="meta-input" type="number" inputmode="numeric" id="f-dur" placeholder="—">
+  <label>Note libre</label>
+  <textarea id="f-notes"></textarea>
+  <button class="send" id="send">Enregistrer la séance</button>
+  <div id="status"></div>
+</div>
+
+<details>
+  <summary>⚙️ Réglages (token GitHub)</summary>
+  <label>Token fine-grained — scope « Contents: read &amp; write » sur le seul repo de données. Stocké uniquement dans ce navigateur.</label>
+  <input class="meta-input" type="password" id="f-token">
+  <button class="btn" style="width:100%;margin-top:8px;font-size:1rem" id="save-token">Enregistrer le token</button>
+</details>
+
+<script>
+"use strict";
+// ------------------------------------------------------------------
+// Le front n'a le droit de faire que trois choses (§6) : AFFICHER ce
+// que recompute.py a préparé, INCRÉMENTER des champs, ENVOYER un
+// fichier de séance. Aucune règle de progression ici.
+// ------------------------------------------------------------------
+const DATA_OWNER = "Sooap95";
+const DATA_REPO  = "z2h-tracker";   // repo privé de données
+const BRANCH     = "main";
+const API = `https://api.github.com/repos/${DATA_OWNER}/${DATA_REPO}/contents`;
+
+const $ = (id) => document.getElementById(id);
+const token = () => localStorage.getItem("z2h_token") || "";
+let plan = null;          // contenu de next-session.json
+let rows = [];            // état de saisie : rows[iExo][iSet] = {weight, reps}
+
+// --- Accès API GitHub ------------------------------------------------
+// cache: "no-store" est OBLIGATOIRE (§9) : l'API GitHub cache
+// agressivement et renverrait le next-session.json d'AVANT le recalcul.
+async function ghGet(path) {
+  return fetch(`${API}/${path}?ref=${BRANCH}`, {
+    cache: "no-store",
+    headers: { Authorization: `Bearer ${token()}`,
+               Accept: "application/vnd.github.raw+json" },
+  });
+}
+
+async function loadPlan() {
+  if (!token()) { $("subtitle").textContent = "⚙️ Renseigne d'abord ton token dans les réglages en bas."; return; }
+  const res = await ghGet("state/next-session.json");
+  if (!res.ok) { $("subtitle").textContent = `Erreur ${res.status} — token ou repo inaccessible.`; return; }
+  plan = await res.json();
+  render();
+}
+
+// --- Affichage -------------------------------------------------------
+function render() {
+  $("title").textContent = plan.template_name;
+  $("subtitle").textContent = `Préparée d'après la séance du ${plan.based_on_last_session ?? "—"}`;
+  const zone = $("exercises");
+  zone.innerHTML = "";
+  rows = [];
+
+  plan.exercises.forEach((exo, i) => {
+    // Préremplissage : charge = cible calculée (ou vide si première fois,
+    // piège n°3) ; reps = rep_max, c'est l'OBJECTIF qu'on corrige à la
+    // baisse si on ne l'a pas atteint (§9).
+    rows.push(exo.targets.map(t => ({ weight: t.target_weight_kg, reps: t.rep_max })));
+
+    const card = document.createElement("div");
+    card.className = "card";
+    card.innerHTML = `
+      <div class="exo-name">${exo.name}</div>
+      <div class="exo-meta">${exo.set_type} · repos ${fmtRest(exo.rest_s)}
+        · dernière fois : ${exo.last_done_on ?? "jamais"}</div>
+      <div class="reason">${exo.reason}</div>`;
+
+    exo.targets.forEach((t, j) => {
+      const row = document.createElement("div");
+      row.className = "set-row";
+      row.innerHTML = `
+        <button class="btn" data-a="w-" aria-label="moins">−</button>
+        <input class="w-input" type="number" inputmode="decimal"
+               step="${exo.increment_kg}" placeholder="kg"
+               value="${t.target_weight_kg ?? ""}">
+        <button class="btn" data-a="w+" aria-label="plus">+</button>
+        <span class="range">${t.rep_min}–${t.rep_max}</span>
+        <button class="btn r-btn" data-a="r-">−</button>
+        <input class="r-input" type="number" inputmode="numeric" value="${t.rep_max}">
+        <button class="btn r-btn" data-a="r+">+</button>`;
+
+      const [wInput, rInput] = [row.querySelector(".w-input"), row.querySelector(".r-input")];
+      // Les steppers écrivent dans `rows` ; le clavier reste possible en
+      // tapant le champ, mais rien n'est obligatoire à taper (§9).
+      row.addEventListener("click", (ev) => {
+        const a = ev.target.dataset?.a;
+        if (!a) return;
+        if (a[0] === "w") {
+          // Charge vide (première fois) : le premier tap part de 0.
+          const cur = parseFloat(wInput.value) || 0;
+          const next = Math.max(0, cur + (a[1] === "+" ? 1 : -1) * exo.increment_kg);
+          wInput.value = +next.toFixed(2);
+        } else {
+          const cur = parseInt(rInput.value) || 0;
+          rInput.value = Math.max(0, cur + (a[1] === "+" ? 1 : -1));
+        }
+        sync(i, j, wInput, rInput);
+      });
+      row.addEventListener("input", () => sync(i, j, wInput, rInput));
+      card.appendChild(row);
+    });
+
+    // Chrono de repos prérégé par exercice, vibration à zéro (§9).
+    const timer = document.createElement("button");
+    timer.className = "timer-btn";
+    timer.textContent = `▶ Repos ${fmtRest(exo.rest_s)}`;
+    timer.addEventListener("click", () => startTimer(timer, exo.rest_s));
+    card.appendChild(timer);
+
+    if (exo.note) {
+      const note = document.createElement("div");
+      note.className = "note"; note.textContent = exo.note;
+      card.appendChild(note);
+    }
+    zone.appendChild(card);
+  });
+
+  $("f-date").value = new Date().toISOString().slice(0, 10);
+  $("meta").hidden = false;
+}
+
+function sync(i, j, wInput, rInput) {
+  rows[i][j] = {
+    weight: wInput.value === "" ? null : parseFloat(wInput.value),
+    reps: parseInt(rInput.value) || 0,
+  };
+}
+
+function fmtRest(s) { return `${Math.floor(s / 60)}'${String(s % 60).padStart(2, "0")}`; }
+
+// --- Chrono de repos -------------------------------------------------
+function startTimer(btn, total) {
+  if (btn.dataset.running) {           // second tap = annulation
+    clearInterval(+btn.dataset.running);
+    delete btn.dataset.running;
+    btn.classList.remove("running");
+    btn.textContent = `▶ Repos ${fmtRest(total)}`;
+    return;
+  }
+  let left = total;
+  btn.classList.add("running");
+  const tick = () => {
+    btn.textContent = `⏱ ${fmtRest(left)}`;
+    if (left-- <= 0) {
+      clearInterval(+btn.dataset.running);
+      delete btn.dataset.running;
+      btn.classList.remove("running");
+      btn.textContent = `▶ Repos ${fmtRest(total)}`;
+      if (navigator.vibrate) navigator.vibrate([300, 120, 300]);
+    }
+  };
+  btn.dataset.running = setInterval(tick, 1000);
+  tick();
+}
+
+// --- Envoi -----------------------------------------------------------
+async function send() {
+  const date = $("f-date").value;
+  if (!date) { return status("Renseigne la date.", true); }
+  const session = {
+    date,
+    template: plan.template,
+    duration_min: $("f-dur").value ? +$("f-dur").value : null,
+    bodyweight_kg: $("f-bw").value ? +$("f-bw").value : null,
+    notes: $("f-notes").value,
+    exercises: plan.exercises.map((exo, i) => ({
+      id: exo.id,
+      // On n'envoie que les séries réellement faites (reps > 0 et charge
+      // renseignée — 0 kg est valide : tractions non lestées).
+      sets: rows[i].filter(s => s.reps > 0 && s.weight !== null)
+                   .map(s => ({ weight_kg: s.weight, reps: s.reps })),
+    })).filter(e => e.sets.length > 0),
+  };
+  if (session.exercises.length === 0) { return status("Aucune série remplie.", true); }
+
+  const path = `data/sessions/${date}_${plan.template}.json`;
+  $("send").disabled = true;
+  status("Envoi…");
+  try {
+    // Si le fichier du jour existe déjà (reprise de saisie), l'API exige
+    // son sha pour accepter l'écrasement. Requête métadonnées (sans
+    // Accept raw), sinon le sha n'est pas dans la réponse.
+    let sha;
+    const head = await fetch(`${API}/${path}?ref=${BRANCH}`, {
+      cache: "no-store",
+      headers: { Authorization: `Bearer ${token()}` },
+    });
+    if (head.ok) sha = (await head.json()).sha;
+    const res = await fetch(`${API}/${path}`, {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${token()}`,
+                 Accept: "application/vnd.github+json" },
+      body: JSON.stringify({
+        message: `Séance ${date} ${plan.template}`,
+        branch: BRANCH,
+        // btoa ne digère pas l'UTF-8 brut (accents des notes) → détour
+        // par encodeURIComponent.
+        content: btoa(unescape(encodeURIComponent(JSON.stringify(session, null, 2) + "\n"))),
+        ...(sha ? { sha } : {}),
+      }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    status("✔ Séance enregistrée — le recalcul tourne, la prochaine séance sera prête dans ~1 min.", false, true);
+  } catch (e) {
+    status(`Échec de l'envoi (${e.message}). Les données restent à l'écran, réessaie.`, true);
+    $("send").disabled = false;
+  }
+}
+
+function status(msg, isErr, isOk) {
+  const el = $("status");
+  el.textContent = msg;
+  el.className = isErr ? "err" : isOk ? "ok" : "";
+}
+
+// --- Init ------------------------------------------------------------
+$("save-token").addEventListener("click", () => {
+  localStorage.setItem("z2h_token", $("f-token").value.trim());
+  $("f-token").value = "";
+  loadPlan();
+});
+$("send").addEventListener("click", send);
+loadPlan();
+</script>
+</body>
+</html>
