@@ -73,6 +73,14 @@
 </div>
 
 <div class="card">
+  <h2>Sommeil</h2>
+  <div class="hint">Donnée de contexte (v2) : aucune interprétation automatique.
+  Les jours sans saisie sont omis — jamais comptés 0 h. Graphe séparé du poids :
+  jamais de double axe.</div>
+  <div id="chart-sleep"></div>
+</div>
+
+<div class="card">
   <h2>Calories vs cible</h2>
   <div class="legend">
     <span style="--c:var(--s1)">kcal du jour</span>
@@ -255,6 +263,17 @@ function renderWeight(daily) {
   tableView(el, mins.map(m => [isoWeek(m.date), m.v]), ["Semaine", "Min (kg)"]);
 }
 
+function renderSleep(daily) {
+  // Compat ascendante (v2, jalon D) : les lignes d'avant la v2 n'ont pas
+  // de colonne sleep_h — parseCsv les ressort undefined, le filtre les
+  // OMET. Un jour non saisi n'existe pas sur le graphe, il ne vaut pas 0.
+  const pts = daily.filter(e => e.sleep_h).map(e => ({ date: e.date, v: +e.sleep_h }));
+  const el = $("chart-sleep");
+  if (pts.length === 0) { el.innerHTML = `<div class="empty">Pas encore de sommeil saisi.</div>`; return; }
+  lineChart(el, pts, "h");
+  tableView(el, pts.map(p => [p.date, p.v]), ["Date", "Heures"]);
+}
+
 function renderKcal(daily, protocol, mealSums) {
   // Deux sources possibles : la saisie manuelle de daily.csv prime,
   // sinon la somme des repas loggés sur l'écran nutrition.
@@ -329,6 +348,7 @@ async function main() {
       renderExo($("exo-select").value);
     }
     renderWeight(daily);
+    renderSleep(daily);
     const mealSums = {};
     parseCsv(mealsTxt).forEach(m => {
       mealSums[m.date] = (mealSums[m.date] || 0) + (+m.kcal || 0);
