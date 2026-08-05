@@ -49,6 +49,17 @@
   .r-btn { min-width: 44px; min-height: 56px; font-size: 1.1rem; }
   .range { color: var(--dim); font-size: .75rem; width: 46px; text-align: center; }
 
+  /* Bloc superset antagoniste (v2, jalon B) : liseré latéral partagé et
+     séries entrelacées A1 → B1 → A2 → B2. Purement visuel — le fichier
+     de séance envoyé reste une entrée par exercice (§7). */
+  .card.superset { border-left: 4px solid var(--accent); }
+  .ss-tag {
+    color: var(--accent); font-size: .75rem; font-weight: 800;
+    letter-spacing: .12em; margin-bottom: 4px;
+  }
+  .superset .exo-name { font-size: .95rem; margin-top: 6px; }
+  .ss-label { color: var(--dim); font-size: .75rem; margin: 6px 0 2px; }
+
   .timer-btn {
     width: 100%; min-height: 56px; margin-top: 4px; border-radius: 10px;
     border: 1px solid var(--accent); background: transparent; color: var(--accent);
@@ -98,7 +109,7 @@
   <button type="button" class="btn" style="width:100%;margin-top:8px;font-size:1rem" id="save-token">Enregistrer le token</button>
   <!-- Numéro de version affiché pour vérifier qu'on n'a pas une vieille
        copie servie par le cache de GitHub Pages. -->
-  <div class="note">front v5</div>
+  <div class="note">front v6</div>
 </details>
 <a href="daily.html" style="display:flex;align-items:center;justify-content:center;min-height:56px;color:var(--accent);text-decoration:none;font-weight:600">Suivi quotidien →</a>
 <a href="meals.html" style="display:flex;align-items:center;justify-content:center;min-height:56px;color:var(--accent);text-decoration:none;font-weight:600">Nutrition →</a>
@@ -165,72 +176,138 @@ function render() {
   zone.innerHTML = "";
   rows = [];
 
-  plan.exercises.forEach((exo, i) => {
-    // Préremplissage : charge = cible calculée (ou vide si première fois,
-    // piège n°3) ; reps = rep_max, c'est l'OBJECTIF qu'on corrige à la
-    // baisse si on ne l'a pas atteint (§9).
+  // Préremplissage : charge = cible calculée (ou vide si première fois,
+  // piège n°3) ; reps = rep_max, c'est l'OBJECTIF qu'on corrige à la
+  // baisse si on ne l'a pas atteint (§9). `rows` est indexé par la
+  // position de l'exercice dans le plan, JAMAIS par sa position à
+  // l'écran — l'entrelacement des supersets ne change pas le stockage.
+  plan.exercises.forEach((exo) => {
     rows.push(exo.targets.map(t => ({ weight: t.target_weight_kg, reps: t.rep_max })));
+  });
 
-    const card = document.createElement("div");
-    card.className = "card";
-    card.innerHTML = `
-      <div class="exo-name">${exo.name}</div>
-      <div class="exo-meta">${exo.set_type} · repos ${fmtRest(exo.rest_s)}
-        · dernière fois : ${exo.last_done_on ?? "jamais"}</div>
-      <div class="reason">${exo.reason}</div>`;
-
-    exo.targets.forEach((t, j) => {
-      const row = document.createElement("div");
-      row.className = "set-row";
-      row.innerHTML = `
-        <button class="btn" data-a="w-" aria-label="moins">−</button>
-        <input class="w-input" type="number" inputmode="decimal"
-               step="${exo.increment_kg}" placeholder="kg"
-               value="${t.target_weight_kg ?? ""}">
-        <button class="btn" data-a="w+" aria-label="plus">+</button>
-        <span class="range">${t.rep_min}–${t.rep_max}</span>
-        <button class="btn r-btn" data-a="r-">−</button>
-        <input class="r-input" type="number" inputmode="numeric" value="${t.rep_max}">
-        <button class="btn r-btn" data-a="r+">+</button>`;
-
-      const [wInput, rInput] = [row.querySelector(".w-input"), row.querySelector(".r-input")];
-      // Les steppers écrivent dans `rows` ; le clavier reste possible en
-      // tapant le champ, mais rien n'est obligatoire à taper (§9).
-      row.addEventListener("click", (ev) => {
-        const a = ev.target.dataset?.a;
-        if (!a) return;
-        if (a[0] === "w") {
-          // Charge vide (première fois) : le premier tap part de 0.
-          const cur = parseFloat(wInput.value) || 0;
-          const next = Math.max(0, cur + (a[1] === "+" ? 1 : -1) * exo.increment_kg);
-          wInput.value = +next.toFixed(2);
-        } else {
-          const cur = parseInt(rInput.value) || 0;
-          rInput.value = Math.max(0, cur + (a[1] === "+" ? 1 : -1));
-        }
-        sync(i, j, wInput, rInput);
-      });
-      row.addEventListener("input", () => sync(i, j, wInput, rInput));
-      card.appendChild(row);
-    });
-
-    // Chrono de repos prérégé par exercice, vibration à zéro (§9).
-    const timer = document.createElement("button");
-    timer.className = "timer-btn";
-    timer.textContent = `▶ Repos ${fmtRest(exo.rest_s)}`;
-    timer.addEventListener("click", () => startTimer(timer, exo.rest_s));
-    card.appendChild(timer);
-
-    if (exo.note) {
-      const note = document.createElement("div");
-      note.className = "note"; note.textContent = exo.note;
-      card.appendChild(note);
+  // Regroupement d'AFFICHAGE (v2, jalon B) : les exercices partageant un
+  // superset_group forment un bloc unique ; champ absent = carte isolée.
+  // Le bloc s'insère à la position du premier exercice du groupe.
+  const groups = [];
+  const groupSlot = new Map();
+  plan.exercises.forEach((exo, i) => {
+    if (exo.superset_group == null) { groups.push([i]); return; }
+    if (groupSlot.has(exo.superset_group)) {
+      groupSlot.get(exo.superset_group).push(i);
+    } else {
+      const slot = [i];
+      groupSlot.set(exo.superset_group, slot);
+      groups.push(slot);
     }
-    zone.appendChild(card);
+  });
+  groups.forEach((indices) => {
+    zone.appendChild(indices.length > 1 ? supersetCard(indices) : soloCard(indices[0]));
   });
 
   $("f-date").value = new Date().toISOString().slice(0, 10);
   $("meta").hidden = false;
+}
+
+// --- Cartes d'exercice -----------------------------------------------
+function exoHeader(exo, prefix) {
+  return `
+      <div class="exo-name">${prefix}${exo.name}</div>
+      <div class="exo-meta">${exo.set_type} · repos ${fmtRest(exo.rest_s)}
+        · dernière fois : ${exo.last_done_on ?? "jamais"}</div>
+      <div class="reason">${exo.reason}</div>`;
+}
+
+function soloCard(i) {
+  const exo = plan.exercises[i];
+  const card = document.createElement("div");
+  card.className = "card";
+  card.innerHTML = exoHeader(exo, "");
+  exo.targets.forEach((t, j) => card.appendChild(setRow(i, j)));
+  card.appendChild(timerBtn(exo.rest_s, ""));
+  appendNote(card, exo.note);
+  return card;
+}
+
+// Bloc superset antagoniste : un seul bloc visuel, les séries dans
+// l'ordre réel d'exécution (A1 → B1 → A2 → B2 → A3 → B3). Le chrono de
+// repos reste PAR exercice, pas par groupe.
+function supersetCard(indices) {
+  const letter = (k) => String.fromCharCode(65 + k);   // 0 → A, 1 → B…
+  const card = document.createElement("div");
+  card.className = "card superset";
+  card.innerHTML = `<div class="ss-tag">SUPERSET</div>` +
+    indices.map((i, k) => exoHeader(plan.exercises[i], `${letter(k)} · `)).join("");
+  const maxSets = Math.max(...indices.map(i => plan.exercises[i].targets.length));
+  for (let j = 0; j < maxSets; j++) {
+    indices.forEach((i, k) => {
+      const exo = plan.exercises[i];
+      if (j >= exo.targets.length) return;
+      const label = document.createElement("div");
+      label.className = "ss-label";
+      label.textContent = `${letter(k)}${j + 1} · ${exo.name}`;
+      card.appendChild(label);
+      card.appendChild(setRow(i, j));
+    });
+  }
+  indices.forEach((i, k) => {
+    card.appendChild(timerBtn(plan.exercises[i].rest_s, `${letter(k)} · `));
+  });
+  indices.forEach((i) => appendNote(card, plan.exercises[i].note));
+  return card;
+}
+
+// Une série = une ligne : [−] charge [+] · fourchette · reps [−][+].
+function setRow(i, j) {
+  const exo = plan.exercises[i];
+  const t = exo.targets[j];
+  const row = document.createElement("div");
+  row.className = "set-row";
+  row.innerHTML = `
+    <button class="btn" data-a="w-" aria-label="moins">−</button>
+    <input class="w-input" type="number" inputmode="decimal"
+           step="${exo.increment_kg}" placeholder="kg"
+           value="${t.target_weight_kg ?? ""}">
+    <button class="btn" data-a="w+" aria-label="plus">+</button>
+    <span class="range">${t.rep_min}–${t.rep_max}</span>
+    <button class="btn r-btn" data-a="r-">−</button>
+    <input class="r-input" type="number" inputmode="numeric" value="${t.rep_max}">
+    <button class="btn r-btn" data-a="r+">+</button>`;
+
+  const [wInput, rInput] = [row.querySelector(".w-input"), row.querySelector(".r-input")];
+  // Les steppers écrivent dans `rows` ; le clavier reste possible en
+  // tapant le champ, mais rien n'est obligatoire à taper (§9).
+  row.addEventListener("click", (ev) => {
+    const a = ev.target.dataset?.a;
+    if (!a) return;
+    if (a[0] === "w") {
+      // Charge vide (première fois) : le premier tap part de 0.
+      const cur = parseFloat(wInput.value) || 0;
+      const next = Math.max(0, cur + (a[1] === "+" ? 1 : -1) * exo.increment_kg);
+      wInput.value = +next.toFixed(2);
+    } else {
+      const cur = parseInt(rInput.value) || 0;
+      rInput.value = Math.max(0, cur + (a[1] === "+" ? 1 : -1));
+    }
+    sync(i, j, wInput, rInput);
+  });
+  row.addEventListener("input", () => sync(i, j, wInput, rInput));
+  return row;
+}
+
+// Chrono de repos préréglé par exercice, vibration à zéro (§9).
+function timerBtn(rest_s, prefix) {
+  const timer = document.createElement("button");
+  timer.className = "timer-btn";
+  timer.textContent = `▶ Repos ${prefix}${fmtRest(rest_s)}`;
+  timer.addEventListener("click", () => startTimer(timer, rest_s, prefix));
+  return timer;
+}
+
+function appendNote(card, text) {
+  if (!text) return;
+  const note = document.createElement("div");
+  note.className = "note"; note.textContent = text;
+  card.appendChild(note);
 }
 
 function sync(i, j, wInput, rInput) {
@@ -243,23 +320,25 @@ function sync(i, j, wInput, rInput) {
 function fmtRest(s) { return `${Math.floor(s / 60)}'${String(s % 60).padStart(2, "0")}`; }
 
 // --- Chrono de repos -------------------------------------------------
-function startTimer(btn, total) {
+// `prefix` : lettre de l'exercice dans un bloc superset ("A · "), vide
+// pour une carte isolée — chaque exercice garde SON chrono.
+function startTimer(btn, total, prefix) {
   if (btn.dataset.running) {           // second tap = annulation
     clearInterval(+btn.dataset.running);
     delete btn.dataset.running;
     btn.classList.remove("running");
-    btn.textContent = `▶ Repos ${fmtRest(total)}`;
+    btn.textContent = `▶ Repos ${prefix}${fmtRest(total)}`;
     return;
   }
   let left = total;
   btn.classList.add("running");
   const tick = () => {
-    btn.textContent = `⏱ ${fmtRest(left)}`;
+    btn.textContent = `⏱ ${prefix}${fmtRest(left)}`;
     if (left-- <= 0) {
       clearInterval(+btn.dataset.running);
       delete btn.dataset.running;
       btn.classList.remove("running");
-      btn.textContent = `▶ Repos ${fmtRest(total)}`;
+      btn.textContent = `▶ Repos ${prefix}${fmtRest(total)}`;
       if (navigator.vibrate) navigator.vibrate([300, 120, 300]);
     }
   };
