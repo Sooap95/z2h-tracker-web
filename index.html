@@ -60,6 +60,14 @@
   .superset .exo-name { font-size: .95rem; margin-top: 6px; }
   .ss-label { color: var(--dim); font-size: .75rem; margin: 6px 0 2px; }
 
+  /* Bandeau deload (v2, jalon C) : séance volontairement contraignante —
+     1 série par exercice, aucun moyen d'en ajouter depuis l'app. */
+  .deload-banner {
+    background: var(--warn); color: #201503; font-weight: 800;
+    border-radius: 12px; padding: 14px 12px; margin-bottom: 14px;
+    text-align: center; letter-spacing: .02em;
+  }
+
   .timer-btn {
     width: 100%; min-height: 56px; margin-top: 4px; border-radius: 10px;
     border: 1px solid var(--accent); background: transparent; color: var(--accent);
@@ -109,7 +117,7 @@
   <button type="button" class="btn" style="width:100%;margin-top:8px;font-size:1rem" id="save-token">Enregistrer le token</button>
   <!-- Numéro de version affiché pour vérifier qu'on n'a pas une vieille
        copie servie par le cache de GitHub Pages. -->
-  <div class="note">front v6</div>
+  <div class="note">front v7</div>
 </details>
 <a href="daily.html" style="display:flex;align-items:center;justify-content:center;min-height:56px;color:var(--accent);text-decoration:none;font-weight:600">Suivi quotidien →</a>
 <a href="meals.html" style="display:flex;align-items:center;justify-content:center;min-height:56px;color:var(--accent);text-decoration:none;font-weight:600">Nutrition →</a>
@@ -175,6 +183,16 @@ function render() {
   const zone = $("exercises");
   zone.innerHTML = "";
   rows = [];
+
+  // Bandeau deload (v2, jalon C) : le plan ne porte qu'une série par
+  // exercice et l'app n'offre aucun moyen d'en ajouter — c'est voulu.
+  // Pour déroger, éditer le fichier de séance a posteriori.
+  if (plan.deload) {
+    const banner = document.createElement("div");
+    banner.className = "deload-banner";
+    banner.textContent = "SEMAINE DE DELOAD — 1 série par exercice, mêmes charges";
+    zone.appendChild(banner);
+  }
 
   // Préremplissage : charge = cible calculée (ou vide si première fois,
   // piège n°3) ; reps = rep_max, c'est l'OBJECTIF qu'on corrige à la
@@ -356,6 +374,10 @@ async function send() {
     duration_min: $("f-dur").value ? +$("f-dur").value : null,
     bodyweight_kg: $("f-bw").value ? +$("f-bw").value : null,
     notes: $("f-notes").value,
+    // Drapeau deload recopié tel quel (jalon C) : c'est lui qui fait
+    // ignorer cette séance par la recherche de dernière performance —
+    // sans lui, la progression se figerait après le premier deload.
+    ...(plan.deload ? { deload: true } : {}),
     exercises: plan.exercises.map((exo, i) => ({
       id: exo.id,
       // On n'envoie que les séries réellement faites (reps > 0 et charge
