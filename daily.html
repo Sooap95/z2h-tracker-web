@@ -46,6 +46,12 @@
 <body>
 <h1>Suivi quotidien</h1>
 <div class="sub" id="subtitle">Chargement…</div>
+<!-- Bandeau de stagnation (§3) : rempli depuis state/advice.json, généré
+     par recompute.py — le front ne fait qu'afficher la conclusion. -->
+<div class="card" id="advice" hidden style="border-color:#f4b03f">
+  <div style="font-weight:700;color:#f4b03f">Stagnation détectée (≥ 2 semaines)</div>
+  <div id="advice-msg" style="font-size:.9rem;margin-top:6px"></div>
+</div>
 
 <div class="card">
   <label>Date</label>
@@ -88,6 +94,7 @@
 </div>
 
 <a class="nav" href="index.html">← Retour à la séance</a>
+<a class="nav" href="meals.html">Nutrition →</a>
 <a class="nav" href="stats.html">Graphes →</a>
 
 <script>
@@ -182,10 +189,12 @@ function prefillToday() {
 function updateFastInfo() {
   const w = eatingWindow($("f-first").value, $("f-last").value);
   if (w === null) { $("fast-info").textContent = ""; return; }
+  // La référence du programme, c'est 16 h de JEÛNE (fenêtre alimentaire
+  // de 8 h max) — on met le jeûne en premier, c'est lui l'objectif.
   const fast = 24 * 60 - w;
   $("fast-info").textContent =
-    `Fenêtre alimentaire : ${fmtWindow(w)} · jeûne : ${fmtWindow(fast)} ` +
-    (w <= 8 * 60 ? "✔ 16/8 respecté" : "✘ au-delà des 8 h");
+    `Jeûne : ${fmtWindow(fast)} · fenêtre alimentaire : ${fmtWindow(w)} ` +
+    (fast >= 16 * 60 ? "✔ 16 h de jeûne atteintes" : "✘ jeûne < 16 h");
 }
 ["f-first", "f-last"].forEach(id => $(id).addEventListener("input", updateFastInfo));
 
@@ -281,8 +290,28 @@ function statusMeas(msg, isErr, isOk) {
   el.className = isErr ? "err" : isOk ? "ok" : "";
 }
 
+// --- Bandeau de stagnation (jalon 7) ---------------------------------
+async function loadAdvice() {
+  try {
+    const res = await fetch(`${CONTENTS}/state/advice.json?ref=${BRANCH}`, {
+      cache: "no-store",
+      headers: { Authorization: `Bearer ${token()}`,
+                 Accept: "application/vnd.github.raw+json" },
+    });
+    if (!res.ok) return;                       // pas d'avis = pas de bandeau
+    const advice = await res.json();
+    if (!advice.stagnation) return;
+    $("advice-msg").textContent = advice.message +
+      (advice.suggested_target_kcal
+        ? ` Nouvelle cible suggérée : ${advice.suggested_target_kcal} kcal — à reporter toi-même dans program/protocol.json.`
+        : "");
+    $("advice").hidden = false;
+  } catch { /* l'avis est un bonus : jamais bloquant */ }
+}
+
 $("send").addEventListener("click", save);
 $("send-meas").addEventListener("click", saveMeas);
+loadAdvice();
 $("f-date").value = new Date().toISOString().slice(0, 10);
 $("f-date").addEventListener("change", prefillToday);
 loadCsv();

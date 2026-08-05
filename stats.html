@@ -82,9 +82,14 @@
 </div>
 
 <div class="card">
-  <h2>Ratio taille / bras</h2>
-  <div class="hint">C'est le RATIO qui compte : un tour de bras qui baisse en perte de
-  gras n'est pas une régression (§5) — si le ratio baisse, tu progresses.</div>
+  <h2>Ratio épaules / taille</h2>
+  <div class="hint">Repère Raptor : ~1,618 (nombre d'or). Le tour de bras est
+  collecté mais volontairement absent d'ici : il peut baisser en perte de gras
+  sans perte de muscle (§5) — ce ratio-là, lui, ne ment pas.</div>
+  <div class="legend">
+    <span style="--c:var(--s1)">ratio mesuré</span>
+    <span style="--c:var(--s2)">cible 1,618</span>
+  </div>
   <div id="chart-ratio"></div>
 </div>
 
@@ -250,8 +255,14 @@ function renderWeight(daily) {
   tableView(el, mins.map(m => [isoWeek(m.date), m.v]), ["Semaine", "Min (kg)"]);
 }
 
-function renderKcal(daily, protocol) {
-  const pts = daily.filter(e => e.kcal).map(e => ({ date: e.date, v: +e.kcal }));
+function renderKcal(daily, protocol, mealSums) {
+  // Deux sources possibles : la saisie manuelle de daily.csv prime,
+  // sinon la somme des repas loggés sur l'écran nutrition.
+  const byDate = {};
+  Object.entries(mealSums).forEach(([d, v]) => { byDate[d] = v; });
+  daily.filter(e => e.kcal).forEach(e => { byDate[e.date] = +e.kcal; });
+  const pts = Object.entries(byDate).sort()
+    .map(([date, v]) => ({ date, v }));
   const el = $("chart-kcal");
   if (pts.length === 0) { el.innerHTML = `<div class="empty">Pas encore de kcal saisies.</div>`; return; }
   const target = protocol?.target_kcal;
@@ -267,22 +278,35 @@ function renderKcal(daily, protocol) {
   if (!target) $("target-label").textContent = "cible : à fixer dans program/protocol.json";
 }
 
+const GOLDEN_RATIO = 1.618;   // le repère épaules/taille du programme
+
 function renderRatio(meas) {
-  const pts = meas.filter(e => e.waist_cm && e.arm_cm)
-    .map(e => ({ date: e.date, v: Math.round(e.waist_cm / e.arm_cm * 100) / 100 }));
-  lineChart($("chart-ratio"), pts, "(taille/bras)");
-  if (pts.length) tableView($("chart-ratio"),
-    meas.map(m => [m.date, m.waist_cm, m.arm_cm, m.shoulders_cm]),
-    ["Date", "Taille", "Bras", "Épaules"]);
+  const pts = meas.filter(e => e.shoulders_cm && e.waist_cm)
+    .map(e => ({ date: e.date, v: Math.round(e.shoulders_cm / e.waist_cm * 1000) / 1000 }));
+  const el = $("chart-ratio");
+  if (pts.length === 0) { el.innerHTML = `<div class="empty">Pas encore de mensurations.</div>`; return; }
+  // L'échelle inclut toujours la cible 1,618 pour qu'elle reste visible
+  // même quand les mesures en sont loin.
+  const sc = makeScales(pts.map(p => p.date),
+                        pts.map(p => p.v).concat([GOLDEN_RATIO]));
+  el.innerHTML = svgOpen(sc, pts[0].date, pts[pts.length - 1].date) +
+    `<line x1="${PAD.l}" x2="${W - PAD.r}" y1="${sc.y(GOLDEN_RATIO)}"
+      y2="${sc.y(GOLDEN_RATIO)}" stroke="${S2}" stroke-width="2"
+      stroke-dasharray="5 4"><title>cible : ${GOLDEN_RATIO}</title></line>` +
+    (pts.length > 1 ? linePath(pts, sc, S1) : "") +
+    dotMarks(pts, sc, S1, "(épaules/taille)") + lastLabel(pts, sc) + "</svg>";
+  tableView(el, meas.map(m => [m.date, m.shoulders_cm, m.waist_cm, m.arm_cm]),
+    ["Date", "Épaules", "Taille", "Bras"]);
 }
 
 async function main() {
   const sub = $("subtitle");
   if (!token()) { sub.textContent = "⚙️ Renseigne ton token sur l'écran séance."; return; }
   try {
-    const [statsTxt, dailyTxt, measTxt, protoTxt] = await Promise.all([
+    const [statsTxt, dailyTxt, measTxt, protoTxt, mealsTxt] = await Promise.all([
       ghRaw("state/stats.json"), ghRaw("data/daily.csv"),
       ghRaw("data/measurements.csv"), ghRaw("program/protocol.json"),
+      ghRaw("data/meals.csv"),
     ]);
     stats = statsTxt ? JSON.parse(statsTxt) : {};
     const daily = parseCsv(dailyTxt);
@@ -305,7 +329,11 @@ async function main() {
       renderExo($("exo-select").value);
     }
     renderWeight(daily);
-    renderKcal(daily, protoTxt ? JSON.parse(protoTxt) : null);
+    const mealSums = {};
+    parseCsv(mealsTxt).forEach(m => {
+      mealSums[m.date] = (mealSums[m.date] || 0) + (+m.kcal || 0);
+    });
+    renderKcal(daily, protoTxt ? JSON.parse(protoTxt) : null, mealSums);
     renderRatio(parseCsv(measTxt));
   } catch (e) {
     sub.textContent = `Échec de chargement : ${e.message}`;

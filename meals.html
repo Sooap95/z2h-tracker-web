@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>z2h — nutrition</title>
+<style>
+  :root {
+    --bg: #111418; --card: #1c2128; --line: #2c333c;
+    --txt: #e8eaed; --dim: #9aa3ad; --accent: #4da3ff; --ok: #38c172; --warn: #f4b03f;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--txt);
+    font-family: system-ui, -apple-system, sans-serif;
+    padding: 12px 12px calc(24px + env(safe-area-inset-bottom));
+    max-width: 560px; margin: 0 auto;
+  }
+  h1 { font-size: 1.25rem; margin: 8px 0 2px; }
+  .sub { color: var(--dim); font-size: .85rem; margin-bottom: 12px; min-height: 1.2em; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px; margin-bottom: 14px; }
+  .total { font-size: 1.6rem; font-weight: 800; }
+  .macros { color: var(--dim); font-size: .9rem; margin-top: 2px; }
+  .logged { font-size: .85rem; color: var(--dim); margin-top: 8px; }
+  .undo { width: 100%; min-height: 48px; margin-top: 8px; border-radius: 10px;
+          border: 1px solid var(--line); background: #242b34; color: var(--txt); font-size: .95rem; }
+  details.menu { background: var(--card); border: 1px solid var(--line);
+                 border-radius: 12px; padding: 0 12px; margin-bottom: 10px; }
+  details.menu summary { min-height: 56px; display: flex; align-items: center;
+                         justify-content: space-between; font-weight: 700; }
+  summary .k { color: var(--dim); font-weight: 400; font-size: .85rem; }
+  .meal { display: flex; align-items: center; gap: 8px; padding: 8px 0;
+          border-top: 1px solid var(--line); }
+  .meal-info { flex: 1; min-width: 0; }
+  .meal-name { font-weight: 600; }
+  .meal-detail { color: var(--dim); font-size: .75rem; }
+  .add {
+    min-width: 56px; min-height: 56px; border-radius: 10px; flex-shrink: 0;
+    border: 1px solid var(--ok); background: transparent; color: var(--ok);
+    font-size: 1.6rem; touch-action: manipulation;
+  }
+  .add:active { background: var(--ok); color: #06130b; }
+  .add:disabled { opacity: .4; }
+  #status { margin: 6px 0; font-size: .9rem; min-height: 1.2em; }
+  #status.err { color: #ff7a7a; } #status.ok { color: var(--ok); }
+  .tip { color: var(--dim); font-size: .78rem; font-style: italic; margin: 10px 0; }
+  a.nav { display: flex; align-items: center; justify-content: center; min-height: 56px;
+          color: var(--accent); text-decoration: none; font-weight: 600; }
+</style>
+</head>
+<body>
+<h1>Nutrition</h1>
+<div class="sub" id="subtitle">Chargement…</div>
+
+<div class="card">
+  <div class="total" id="total">— kcal</div>
+  <div class="macros" id="total-macros"></div>
+  <div class="logged" id="logged"></div>
+  <button type="button" class="undo" id="undo" hidden>Annuler le dernier repas</button>
+  <div id="status"></div>
+</div>
+
+<div id="menus"></div>
+<div class="tip" id="tip"></div>
+
+<a class="nav" href="index.html">← Séance</a>
+<a class="nav" href="daily.html">← Suivi quotidien</a>
+<a class="nav" href="stats.html">Graphes →</a>
+
+<script>
+"use strict";
+// Écran nutrition (§10 jalon 6) : les 5 menus types en presets, un tap =
+// un repas loggé dans data/meals.csv. Le référentiel (menus, macros)
+// vient de program/meals.json — rien n'est chiffré ici.
+const DATA_OWNER = "Sooap95";
+const DATA_REPO  = "z2h-tracker";
+const BRANCH     = "main";
+const CONTENTS = `https://api.github.com/repos/${DATA_OWNER}/${DATA_REPO}/contents`;
+const CSV_API = `${CONTENTS}/data/meals.csv`;
+const HEADER = "date,meal,kcal,carbs_g,protein_g,fat_g";
+
+const $ = (id) => document.getElementById(id);
+const token = () => localStorage.getItem("z2h_token") || "";
+const today = () => new Date().toISOString().slice(0, 10);
+
+let csvLines = [HEADER];
+let csvSha = null;
+let targetKcal = null;
+
+async function ghRaw(path) {
+  const res = await fetch(`${CONTENTS}/${path}?ref=${BRANCH}`, {
+    cache: "no-store",
+    headers: { Authorization: `Bearer ${token()}`,
+               Accept: "application/vnd.github.raw+json" },
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`HTTP ${res.status} sur ${path}`);
+  return res.text();
+}
+
+async function loadAll() {
+  const sub = $("subtitle");
+  if (!token()) { sub.textContent = "⚙️ Renseigne ton token sur l'écran séance."; return; }
+  try {
+    const [mealsTxt, protoTxt] = await Promise.all([
+      ghRaw("program/meals.json"), ghRaw("program/protocol.json"),
+    ]);
+    // Le CSV se charge avec sha (nécessaire pour réécrire).
+    const res = await fetch(`${CSV_API}?ref=${BRANCH}`, {
+      cache: "no-store", headers: { Authorization: `Bearer ${token()}` } });
+    if (res.ok) {
+      const meta = await res.json();
+      csvSha = meta.sha;
+      csvLines = decodeURIComponent(escape(atob(meta.content.replace(/\n/g, "")))).trim().split("\n");
+    }
+    targetKcal = protoTxt ? JSON.parse(protoTxt).target_kcal : null;
+    renderMenus(JSON.parse(mealsTxt));
+    renderTotals();
+    sub.textContent = "";
+  } catch (e) {
+    sub.textContent = `Échec de chargement : ${e.message}`;
+  }
+}
+
+function todayEntries() {
+  return csvLines.slice(1)
+    .map(l => l.split(","))
+    .filter(f => f[0] === today())
+    .map(f => ({ meal: f[1], kcal: +f[2], g: +f[3], p: +f[4], l: +f[5] }));
+}
+
+function renderTotals() {
+  const e = todayEntries();
+  const sum = (k) => e.reduce((t, x) => t + x[k], 0);
+  $("total").textContent = `${sum("kcal")} kcal` +
+    (targetKcal ? ` / ${targetKcal}` : "");
+  $("total-macros").textContent =
+    `G ${sum("g")} · P ${sum("p")} · L ${sum("l")} (g)`;
+  $("logged").textContent = e.length
+    ? "Aujourd'hui : " + e.map(x => x.meal).join(" · ")
+    : "Aucun repas loggé aujourd'hui.";
+  $("undo").hidden = e.length === 0;
+}
+
+function mealRow(m) {
+  const row = document.createElement("div");
+  row.className = "meal";
+  row.innerHTML = `
+    <div class="meal-info">
+      <div class="meal-name">${m.name} <span class="meal-detail">${m.kcal} kcal · G ${m.g}/P ${m.p}/L ${m.l}</span></div>
+      ${m.composition ? `<div class="meal-detail">${m.composition}</div>` : ""}
+    </div>
+    <button type="button" class="add" aria-label="logger ${m.name}">＋</button>`;
+  row.querySelector(".add").addEventListener("click", (ev) => logMeal(m, ev.target));
+  return row;
+}
+
+function renderMenus(data) {
+  const zone = $("menus");
+  data.menus.forEach(menu => {
+    const d = document.createElement("details");
+    d.className = "menu";
+    d.innerHTML = `<summary>${menu.name}
+      <span class="k">${menu.kcal} kcal · G ${menu.macros.g}/P ${menu.macros.p}/L ${menu.macros.l}</span></summary>`;
+    menu.meals.forEach(m => d.appendChild(mealRow(m)));
+    zone.appendChild(d);
+  });
+  const ext = document.createElement("details");
+  ext.className = "menu";
+  ext.innerHTML = `<summary>Je mange dehors <span class="k">presets restaurant</span></summary>`;
+  data.external.forEach(m => ext.appendChild(mealRow(m)));
+  zone.appendChild(ext);
+  $("tip").textContent = data.restaurant_tip;
+}
+
+// --- Écritures --------------------------------------------------------
+async function pushCsv(lines, message) {
+  const res = await fetch(CSV_API, {
+    method: "PUT",
+    headers: { Authorization: `Bearer ${token()}`, Accept: "application/vnd.github+json" },
+    body: JSON.stringify({
+      message, branch: BRANCH,
+      content: btoa(unescape(encodeURIComponent(lines.join("\n") + "\n"))),
+      ...(csvSha ? { sha: csvSha } : {}),
+    }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  csvSha = (await res.json()).content.sha;
+  csvLines = lines;
+  renderTotals();
+}
+
+async function logMeal(m, btn) {
+  btn.disabled = true;
+  status("Envoi…");
+  try {
+    // Le nom part en CSV : les virgules éventuelles deviennent des points-virgules.
+    const line = [today(), m.name.replace(/,/g, ";"), m.kcal, m.g, m.p, m.l].join(",");
+    await pushCsv([...csvLines, line], `Repas ${today()} : ${m.name}`);
+    status(`✔ ${m.name} loggé.`, false, true);
+  } catch (e) {
+    status(`Échec (${e.message}) — réessaie.`, true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function undoLast() {
+  const idx = csvLines.map((l, i) => l.startsWith(today() + ",") ? i : -1)
+    .filter(i => i > 0).pop();
+  if (idx === undefined) return;
+  $("undo").disabled = true;
+  status("Annulation…");
+  try {
+    const removed = csvLines[idx].split(",")[1];
+    await pushCsv(csvLines.filter((_, i) => i !== idx), `Annulation repas : ${removed}`);
+    status(`✔ ${removed} retiré.`, false, true);
+  } catch (e) {
+    status(`Échec (${e.message}) — réessaie.`, true);
+  } finally {
+    $("undo").disabled = false;
+  }
+}
+
+function status(msg, isErr, isOk) {
+  const el = $("status");
+  el.textContent = msg;
+  el.className = isErr ? "err" : isOk ? "ok" : "";
+}
+
+$("undo").addEventListener("click", undoLast);
+loadAll();
+</script>
+</body>
+</html>
