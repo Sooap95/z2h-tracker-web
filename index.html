@@ -27,7 +27,24 @@
     font-family: Oswald, sans-serif; font-weight: 700; font-size: 26px;
     text-transform: uppercase; letter-spacing: .02em; margin: 8px 0 2px;
   }
-  .sub { color: var(--dim); font-size: 11.5px; line-height: 1.5; margin-bottom: 14px; }
+  .sub { color: var(--dim); font-size: 11.5px; line-height: 1.5; margin-bottom: 10px; }
+  .switcher { margin: 0 0 14px; }
+  .switcher-label {
+    color: var(--dim); font-size: 10.5px;
+    text-transform: uppercase; letter-spacing: .12em; margin-bottom: 6px;
+  }
+  .switcher-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
+  .switcher-btn {
+    min-height: 56px; border-radius: 2px;
+    border: 1px solid var(--line); background: #1B1F25; color: var(--dim);
+    font-family: Oswald, sans-serif; font-weight: 600; font-size: 15px;
+    text-transform: uppercase; letter-spacing: .04em;
+    touch-action: manipulation;
+  }
+  .switcher-btn.on {
+    background: var(--blue-solid); color: var(--txt); border-color: var(--blue-solid);
+  }
+  .switcher-btn.rec:not(.on) { border-color: var(--blue-solid); color: var(--blue); }
   .card {
     background: var(--surface); border: 1px solid var(--line);
     border-radius: 2px; padding: 14px 12px; margin-bottom: 12px;
@@ -164,6 +181,11 @@
 <body>
 <h1 id="title">z2h-tracker</h1>
 <div class="sub" id="subtitle">Chargement…</div>
+<div class="switcher" id="switcher" hidden>
+  <div class="switcher-label">Changer de séance</div>
+  <div class="switcher-row" id="switcher-row"></div>
+</div>
+<audio id="keep-alive" loop playsinline></audio>
 <div id="exercises"></div>
 
 <div class="card" id="meta" hidden>
@@ -184,7 +206,7 @@
   <label>Token fine-grained — scope « Contents: read & write » sur le seul repo de données. Stocké uniquement dans ce navigateur.</label>
   <input class="meta-input" type="password" id="f-token">
   <button type="button" class="btn" style="width:100%;margin-top:8px;font-size:16px;font-weight:600;letter-spacing:.06em;text-transform:uppercase" id="save-token">Enregistrer le token</button>
-  <div class="note">front v9 — bip fin de repos</div>
+  <div class="note">front v10 — changer de séance + chrono fond</div>
 </details>
 <div class="knurl"></div>
 <a class="nav" href="daily.html">Suivi quotidien →</a>
