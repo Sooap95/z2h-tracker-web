@@ -163,6 +163,12 @@
   #status.err { color: var(--amber); } #status.ok { color: var(--txt); }
   details { margin-top: 18px; color: var(--dim); font-size: 12.5px; }
   summary { min-height: 44px; display: flex; align-items: center; }
+  .check-row {
+    display: flex; align-items: center; gap: 12px; min-height: 56px;
+    font-size: 15px; margin: 8px 0 0; color: var(--txt);
+    text-transform: none; letter-spacing: 0;
+  }
+  .check-row input { width: 26px; height: 26px; accent-color: var(--txt); }
   .knurl {
     height: 7px; margin: 18px 0 6px;
     background: repeating-linear-gradient(45deg, var(--line) 0 1px, transparent 1px 5px);
@@ -185,7 +191,6 @@
   <div class="switcher-label">Changer de séance</div>
   <div class="switcher-row" id="switcher-row"></div>
 </div>
-<audio id="keep-alive" loop playsinline></audio>
 <div id="exercises"></div>
 
 <div class="card" id="meta" hidden>
@@ -206,7 +211,8 @@
   <label>Token fine-grained — scope « Contents: read & write » sur le seul repo de données. Stocké uniquement dans ce navigateur.</label>
   <input class="meta-input" type="password" id="f-token">
   <button type="button" class="btn" style="width:100%;margin-top:8px;font-size:16px;font-weight:600;letter-spacing:.06em;text-transform:uppercase" id="save-token">Enregistrer le token</button>
-  <div class="note">front v10 — changer de séance + chrono fond</div>
+  <label class="check-row"><input type="checkbox" id="f-alarm" checked> Bip de fin de repos</label>
+  <div class="note">front v11 — chrono sans couper YouTube : vibration + notif, bip seulement à zéro (ou au retour sur l'onglet si iOS a gelé la page).</div>
 </details>
 <div class="knurl"></div>
 <a class="nav" href="daily.html">Suivi quotidien →</a>
