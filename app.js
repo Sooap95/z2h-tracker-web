@@ -280,57 +280,19 @@ function fmtRest(s) { return `${Math.floor(s / 60)}'${String(s % 60).padStart(2,
 
 const runningTimers = new Map();
 let wakeLock = null;
-let keepAliveOsc = null;
 let audioCtx = null;
+let pendingAlarm = false;
+
+function soundEnabled() {
+  try { return localStorage.getItem("z2h_alarm_sound") !== "0"; }
+  catch (_) { return true; }
+}
 
 function ensureAudio() {
   const AC = window.AudioContext || window.webkitAudioContext;
   if (!AC) return;
   if (!audioCtx) audioCtx = new AC();
   if (audioCtx.state === "suspended") audioCtx.resume();
-}
-
-function silentWavDataUri() {
-  const sampleRate = 8000, samples = sampleRate;
-  const buf = new ArrayBuffer(44 + samples);
-  const v = new DataView(buf);
-  const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
-  w(0, "RIFF"); v.setUint32(4, 36 + samples, true); w(8, "WAVE");
-  w(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true);
-  v.setUint16(22, 1, true); v.setUint32(24, sampleRate, true);
-  v.setUint32(28, sampleRate, true); v.setUint16(32, 1, true);
-  v.setUint16(34, 8, true); w(36, "data"); v.setUint32(40, samples, true);
-  for (let i = 0; i < samples; i++) v.setUint8(44 + i, 128);
-  const bytes = new Uint8Array(buf);
-  let bin = "";
-  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-  return "data:audio/wav;base64," + btoa(bin);
-}
-
-function startKeepAlive() {
-  const el = $("keep-alive");
-  if (el) {
-    if (!el.src) el.src = silentWavDataUri();
-    el.play().catch(() => {});
-  }
-  ensureAudio();
-  if (!audioCtx || keepAliveOsc) return;
-  const osc = audioCtx.createOscillator();
-  const gain = audioCtx.createGain();
-  osc.frequency.value = 20;
-  gain.gain.value = 0.00001;
-  osc.connect(gain);
-  gain.connect(audioCtx.destination);
-  osc.start();
-  keepAliveOsc = osc;
-}
-
-function stopKeepAlive() {
-  const el = $("keep-alive");
-  if (el) { el.pause(); el.currentTime = 0; }
-  if (!keepAliveOsc) return;
-  try { keepAliveOsc.stop(); } catch (_) {}
-  keepAliveOsc = null;
 }
 
 async function acquireWakeLock() {
@@ -351,32 +313,28 @@ function releaseWakeLock() {
 }
 
 function syncBackgroundHold() {
-  if (runningTimers.size) {
-    startKeepAlive();
-    acquireWakeLock();
-  } else {
-    stopKeepAlive();
-    releaseWakeLock();
-  }
+  if (runningTimers.size) acquireWakeLock();
+  else releaseWakeLock();
 }
 
 function playBeep() {
+  if (!soundEnabled()) return;
   try {
     ensureAudio();
     if (!audioCtx) return;
     const now = audioCtx.currentTime;
-    [0, 0.2, 0.4].forEach((offset) => {
+    [0, 0.22, 0.44].forEach((offset) => {
       const osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
-      osc.type = "sine";
+      osc.type = "square";
       osc.frequency.value = 880;
       gain.gain.setValueAtTime(0.0001, now + offset);
-      gain.gain.exponentialRampToValueAtTime(0.4, now + offset + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + offset + 0.15);
+      gain.gain.exponentialRampToValueAtTime(0.18, now + offset + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + offset + 0.16);
       osc.connect(gain);
       gain.connect(audioCtx.destination);
       osc.start(now + offset);
-      osc.stop(now + offset + 0.17);
+      osc.stop(now + offset + 0.18);
     });
   } catch (_) {}
 }
@@ -395,6 +353,12 @@ function requestNotify() {
   }
 }
 
+function announceRestDone() {
+  playBeep();
+  if (navigator.vibrate) navigator.vibrate([300, 120, 300, 120, 300]);
+  notifyRestDone();
+}
+
 function finishTimer(btn, total, prefix, announce) {
   const rec = runningTimers.get(btn);
   if (rec) {
@@ -405,11 +369,9 @@ function finishTimer(btn, total, prefix, announce) {
   btn.classList.remove("running");
   btn.textContent = `▶ Repos ${prefix}${fmtRest(total)}`;
   syncBackgroundHold();
-  if (announce) {
-    playBeep();
-    if (navigator.vibrate) navigator.vibrate([300, 120, 300, 120, 300]);
-    notifyRestDone();
-  }
+  if (!announce) return;
+  if (document.visibilityState === "visible") announceRestDone();
+  else pendingAlarm = true;
 }
 
 function tickTimer(btn) {
@@ -425,7 +387,6 @@ function startTimer(btn, total, prefix) {
     finishTimer(btn, total, prefix, false);
     return;
   }
-  ensureAudio();
   requestNotify();
   btn.classList.add("running");
   const rec = { endsAt: Date.now() + total * 1000, total, prefix, id: 0 };
@@ -443,12 +404,25 @@ function stopAllTimers() {
 }
 
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState !== "visible" || !runningTimers.size) return;
-  ensureAudio();
+  if (document.visibilityState !== "visible") return;
+  if (pendingAlarm) {
+    pendingAlarm = false;
+    announceRestDone();
+  }
+  if (!runningTimers.size) return;
   acquireWakeLock();
-  startKeepAlive();
   for (const btn of runningTimers.keys()) tickTimer(btn);
 });
+
+function bindAlarmToggle() {
+  const el = $("f-alarm");
+  if (!el) return;
+  el.checked = soundEnabled();
+  el.addEventListener("change", () => {
+    try { localStorage.setItem("z2h_alarm_sound", el.checked ? "1" : "0"); }
+    catch (_) {}
+  });
+}
 
 async function send() {
   const date = $("f-date").value;
@@ -517,4 +491,5 @@ $("save-token").addEventListener("click", () => {
   loadPlan();
 });
 $("send").addEventListener("click", send);
+bindAlarmToggle();
 loadPlan();
